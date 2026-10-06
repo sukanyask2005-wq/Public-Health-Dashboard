@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Public Health Real-time Dashboard</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- PapaParse for parsing CSV data from Google Sheets -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <!-- Leaflet CSS and JS for Interactive Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Custom Styles -->
+    <style>
+        body {
+            font-family: 'Prompt', sans-serif;
+            background-color: #f3f4f6;
+        }
+        #map {
+            height: 400px;
+            width: 100%;
+            border-radius: 0.5rem;
+            z-index: 1;
+        }
+        .stat-card {
+            transition: transform 0.2s ease-in-out;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 5px solid #3498db;
+            width: 50px;
+            height: 50px;
+            -webkit-animation: spin 1s linear infinite; /* Safari */
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Custom scrollbar for table */
+        .table-container::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        .table-container::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+            border-radius: 4px;
+        }
+        .table-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        .table-container::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body class="text-gray-800 antialiased">
+
+<div class="min-h-screen flex flex-col">
+    <!-- Navbar -->
+    <nav class="bg-blue-800 text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <i class="fa-solid fa-notes-medical text-2xl mr-3"></i>
+                    <span class="font-bold text-xl tracking-wide">Public Health Dashboard</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="last-updated" class="text-sm text-blue-200 hidden sm:block">กำลังโหลดข้อมูล...</span>
+                    <button onclick="loadData()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-md text-sm font-medium transition duration-150 ease-in-out flex items-center">
+                        <i class="fa-solid fa-rotate-right mr-2"></i> รีเฟรชข้อมูล
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="flex-grow p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
+        
+        <!-- Loading overlay -->
+        <div id="loading-screen" class="fixed inset-0 bg-white bg-opacity-80 z-50 flex flex-col justify-center items-center">
+            <div class="loader mb-4"></div>
+            <p class="text-blue-800 font-medium text-lg">กำลังดึงข้อมูลจาก Google Sheets...</p>
+        </div>
+
+        <!-- Error Message Container -->
+        <div id="error-container" class="hidden bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded shadow-sm" role="alert">
+            <p class="font-bold">เกิดข้อผิดพลาด!</p>
+            <p id="error-message">ไม่สามารถโหลดข้อมูลได้ กรุณาตรวจสอบลิงก์ CSV หรือการเชื่อมต่ออินเทอร์เน็ต</p>
+        </div>
+
+        <!-- Summary Cards (Dynamically Populated) -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" id="kpi-container">
+            <!-- Cards will be injected here via JS -->
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <!-- Map Section -->
+            <div class="lg:col-span-2 bg-white rounded-xl shadow-md p-4 border border-gray-100 flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-semibold text-gray-700"><i class="fa-solid fa-map-location-dot mr-2 text-blue-500"></i>แผนที่การกระจายตัว</h2>
+                </div>
+                <!-- Warning Message ย้ายมาไว้ด้านบนเพื่อไม่ให้บังแผนที่ -->
+                <div id="map-fallback" class="bg-yellow-50 text-yellow-800 p-3 mb-3 rounded-md text-sm hidden border border-yellow-200">
+                    <i class="fa-solid fa-triangle-exclamation mr-2 text-yellow-600"></i>ไม่พบคอลัมน์พิกัด (Lat, Lng, ละติจูด, ลองจิจูด) แผนที่จะไม่แสดงจุดมาร์คเกอร์ แต่คุณยังสามารถดูแผนที่ได้
+                </div>
+                <div id="map" class="bg-gray-100 flex-grow relative border border-gray-200"></div>
+            </div>
+
+            <!-- Pie Chart Section -->
+            <div class="bg-white rounded-xl shadow-md p-4 border border-gray-100 flex flex-col">
+                <h2 class="text-lg font-semibold text-gray-700 mb-4" id="pie-chart-title"><i class="fa-solid fa-chart-pie mr-2 text-indigo-500"></i>สัดส่วนข้อมูล</h2>
+                <div class="flex-grow relative h-64 w-full">
+                    <canvas id="pieChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- Bar Chart Section -->
+            <div class="bg-white rounded-xl shadow-md p-4 border border-gray-100">
+                <h2 class="text-lg font-semibold text-gray-700 mb-4" id="bar-chart-title"><i class="fa-solid fa-chart-bar mr-2 text-green-500"></i>ข้อมูลสูงสุด 10 อันดับ</h2>
+                <div class="relative h-72 w-full">
+                    <canvas id="barChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Line Chart Section -->
+            <div class="bg-white rounded-xl shadow-md p-4 border border-gray-100">
+                <h2 class="text-lg font-semibold text-gray-700 mb-4" id="line-chart-title"><i class="fa-solid fa-chart-line mr-2 text-red-500"></i>แนวโน้มตามเวลา</h2>
+                <div class="relative h-72 w-full">
+                    <canvas id="lineChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Table Section -->
+        <div class="bg-white rounded-xl shadow-md overflow-hidden border border-gray-100">
+            <div class="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-gray-700"><i class="fa-solid fa-table mr-2 text-gray-500"></i>ข้อมูลดิบ (Raw Data)</h2>
+                <span class="text-sm text-gray-500" id="total-rows">0 รายการ</span>
+            </div>
+            <div class="overflow-x-auto table-container max-h-96">
+                <table class="min-w-full divide-y divide-gray-200" id="data-table">
+                    <thead class="bg-gray-100 sticky top-0" id="table-head">
+                        <!-- Headers injected via JS -->
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="table-body">
+                        <!-- Data injected via JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </main>
+    
+    <!-- Footer -->
+    <footer class="bg-white border-t border-gray-200 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <p class="text-sm text-gray-500">ระบบ Dashboard สาธารณสุข อัพเดทอัตโนมัติ</p>
+            <p class="text-sm text-gray-400">พัฒนาด้วย HTML, TailwindCSS, Chart.js และ Leaflet</p>
+        </div>
+    </footer>
+</div>
+
+<script>
+    // URL ของ Google Sheets ที่ตีพิมพ์เป็น CSV
+    const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTt7B-4hbQ_5heXaDJzG7j_V3zWEPdGo0j2Vp70GWoJ2umxmyTrAinLtcMOh8TDbqI-7Zd-ca9gPAzu/pub?output=csv";
+
+    // Global variables สำหรับเก็บ instance ของกราฟและแผนที่
+    let map = null;
+    let markersLayer = null;
+    let charts = {
+        bar: null,
+        pie: null,
+        line: null
+    };
+
+    // Colors สำหรับกราฟ
+    const chartColors = [
+        'rgba(59, 130, 246, 0.8)', // Blue
+        'rgba(16, 185, 129, 0.8)', // Green
+        'rgba(245, 158, 11, 0.8)', // Yellow
+        'rgba(239, 68, 68, 0.8)',  // Red
+        'rgba(139, 92, 246, 0.8)', // Purple
+        'rgba(236, 72, 153, 0.8)', // Pink
+        'rgba(20, 184, 166, 0.8)', // Teal
+        'rgba(249, 115, 22, 0.8)', // Orange
+    ];
+
+    // เริ่มทำงานเมื่อโหลดหน้าเสร็จ
+    document.addEventListener('DOMContentLoaded', () => {
+        initMap();
+        loadData();
+        
+        // ตั้งเวลาให้ดึงข้อมูลใหม่ทุกๆ 5 นาที (300,000 ms)
+        setInterval(loadData, 300000);
+    });
+
+    // ฟังก์ชันดึงข้อมูลและประมวลผล
+    function loadData() {
+        showLoading(true);
+        hideError();
+
+        Papa.parse(CSV_URL, {
+            download: true,
+            header: true,
+            dynamicTyping: true, // แปลงตัวเลขให้เป็น Number อัตโนมัติ
+            skipEmptyLines: true,
+            complete: function(results) {
+                if (results.errors.length > 0 && results.data.length === 0) {
+                    showError("พบข้อผิดพลาดในการอ่านข้อมูล CSV");
+                    showLoading(false);
+                    return;
+                }
+                
+                const data = results.data;
+                const columns = results.meta.fields;
+                
+                if(!data || data.length === 0) {
+                    showError("ไม่พบข้อมูลในไฟล์ CSV");
+                    showLoading(false);
+                    return;
+                }
+
+                // วิเคราะห์โครงสร้างข้อมูล
+                const dataInfo = analyzeDataStructure(data, columns);
+                
+                // อัพเดทหน้าจอ
+                updateTimestamp();
+                buildKPIs(data, dataInfo);
+                updateTable(data, columns);
+                
+                // สร้างกราฟและแผนที่
+                buildCharts(data, dataInfo);
+                updateMap(data, dataInfo);
+
+                showLoading(false);
+            },
+            error: function(error) {
+                showError("ไม่สามารถเชื่อมต่อกับ Google Sheets ได้: " + error.message);
+                showLoading(false);
+            }
+        });
+    }
+
+    // ฟังก์ชันฉลาดที่ใช้วิเคราะห์ว่าคอลัมน์ไหนคืออะไร
+    function analyzeDataStructure(data, columns) {
+        let numericCols = [];
+        let categoricalCols = [];
+        let dateCols = [];
+        let geoCols = { lat: null, lng: null };
+
+        columns.forEach(col => {
+            // เช็คว่าเป็นตัวเลขหรือไม่ (สุ่มตรวจ 5 แถวแรก)
+            let isNumeric = true;
+            let isDate = false;
+            let sampleCount = Math.min(5, data.length);
+            
+            for(let i=0; i<sampleCount; i++) {
+                let val = data[i][col];
+                if(val !== null && val !== '') {
+                    if (typeof val !== 'number') {
+                        isNumeric = false;
+                        
+                        // ลองเช็คว่าเป็นวันที่หรือไม่
+                        if(typeof val === 'string' && val.length > 5 && !isNaN(Date.parse(val))) {
+                            isDate = true;
+                        }
+                    }
+                }
+            }
+
+            // ค้นหาคอลัมน์พิกัดจากชื่อ รองรับภาษาไทย (ดึงออกมาทำนอกเงื่อนไข เผื่อพิกัดติด String)
+            let colLower = col.toLowerCase();
+            let colNoSpace = colLower.replace(/\s+/g, ''); // ลบช่องว่างออกทั้งหมดเพื่อให้อ่านง่ายขึ้น (เช่น 'acc la' กลายเป็น 'accla')
+            
+            if (colLower.includes('lat') || colLower.includes('ละติจูด') || colLower === 'y' || colNoSpace.includes('accla')) geoCols.lat = col;
+            if (colLower.includes('lon') || colLower.includes('lng') || colLower.includes('ลองจิจูด') || colLower.includes('ลองติจูด') || colLower === 'x' || colNoSpace.includes('acclo')) geoCols.lng = col;
+
+            if (isNumeric) {
+                numericCols.push(col);
+            } else if (isDate) {
+                dateCols.push(col);
+            } else {
+                categoricalCols.push(col);
+            }
+        });
+
+        return { numericCols, categoricalCols, dateCols, geoCols };
+    }
+
+    function buildKPIs(data, dataInfo) {
+        const container = document.getElementById('kpi-container');
+        container.innerHTML = ''; // Clear old
+
+        // เลือกคอลัมน์ตัวเลขมาแสดงเป็น KPI สูงสุด 4 ตัว
+        const kpiCols = dataInfo.numericCols.filter(c => c !== dataInfo.geoCols.lat && c !== dataInfo.geoCols.lng).slice(0, 4);
+        
+        const icons = ['fa-users', 'fa-hospital-user', 'fa-house-medical', 'fa-skull-crossbones'];
+        const colors = ['text-blue-600', 'text-yellow-500', 'text-green-500', 'text-red-500'];
+        const bgColors = ['bg-blue-100', 'bg-yellow-100', 'bg-green-100', 'bg-red-100'];
+
+        if (kpiCols.length === 0) {
+            container.innerHTML = `<div class="col-span-full text-center text-gray-500">ไม่มีคอลัมน์ตัวเลขสำหรับแสดงผลสรุป</div>`;
+            return;
+        }
+
+        kpiCols.forEach((col, index) => {
+            // หาผลรวม
+            const sum = data.reduce((acc, row) => acc + (Number(row[col]) || 0), 0);
+            
+            const iClass = icons[index % icons.length];
+            const cClass = colors[index % colors.length];
+            const bgClass = bgColors[index % bgColors.length];
+
+            const card = `
+                <div class="stat-card bg-white rounded-xl shadow-md p-6 border border-gray-100 flex items-center">
+                    <div class="p-4 rounded-full ${bgClass} ${cClass} mr-4">
+                        <i class="fa-solid ${iClass} text-2xl"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-medium text-gray-500 uppercase">${col}</p>
+                        <p class="text-2xl font-bold text-gray-800">${sum.toLocaleString()}</p>
+                    </div>
+                </div>
+            `;
+            container.innerHTML += card;
+        });
+    }
+
+    function updateTable(data, columns) {
+        document.getElementById('total-rows').innerText = `ทั้งหมด ${data.length.toLocaleString()} รายการ`;
+        
+        const thead = document.getElementById('table-head');
+        const tbody = document.getElementById('table-body');
+        
+        // Headers
+        let headHTML = '<tr>';
+        columns.forEach(col => {
+            headHTML += `<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">${col}</th>`;
+        });
+        headHTML += '</tr>';
+        thead.innerHTML = headHTML;
+
+        // Body
+        let bodyHTML = '';
+        data.forEach(row => {
+            bodyHTML += '<tr class="hover:bg-gray-50">';
+            columns.forEach(col => {
+                let val = row[col];
+                // Format numbers properly
+                if(typeof val === 'number') {
+                    // Check if it's lat/lng to avoid adding commas to coordinates
+                    if(col.toLowerCase().includes('lat') || col.toLowerCase().includes('lon') || col.toLowerCase().includes('lng')) {
+                        val = val;
+                    } else {
+                        val = val.toLocaleString();
+                    }
+                }
+                bodyHTML += `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">${val !== null ? val : '-'}</td>`;
+            });
+            bodyHTML += '</tr>';
+        });
+        tbody.innerHTML = bodyHTML;
+    }
+
+    function initMap() {
+        // สร้างแผนที่ Leaflet ตั้งค่าเริ่มต้นที่ประเทศไทย
+        map = L.map('map').setView([15.8700, 100.9925], 5);
+        
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            subdomains: 'abcd',
+            maxZoom: 20
+        }).addTo(map);
+
+        markersLayer = L.layerGroup().addTo(map);
+    }
+
+    function updateMap(data, dataInfo) {
+        markersLayer.clearLayers();
+        const fallbackMsg = document.getElementById('map-fallback');
+
+        // บังคับให้แผนที่อัพเดทขนาด ป้องกันปัญหาแผนที่เทาโหลดไม่เต็ม
+        setTimeout(() => { if(map) map.invalidateSize(); }, 200);
+
+        if (!dataInfo.geoCols.lat || !dataInfo.geoCols.lng) {
+            fallbackMsg.classList.remove('hidden');
+            return;
+        }
+        
+        fallbackMsg.classList.add('hidden');
+        
+        const latCol = dataInfo.geoCols.lat;
+        const lngCol = dataInfo.geoCols.lng;
+        
+        // หาค่าหลักที่จะเอามาแสดงใน Popup (คอลัมน์แรกที่เป็นหมวดหมู่ หรือตัวเลขตัวแรก)
+        const nameCol = dataInfo.categoricalCols[0] || '';
+        const valCol = dataInfo.numericCols.find(c => c !== latCol && c !== lngCol) || '';
+
+        let bounds = [];
+
+        data.forEach(row => {
+            // แปลงข้อมูลเป็น Number เสมอ เผื่อติด String มาจาก CSV
+            const lat = Number(row[latCol]);
+            const lng = Number(row[lngCol]);
+            
+            if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+                let popupContent = `<b>รายละเอียดจุดนี้</b><br>`;
+                if (nameCol) popupContent += `${nameCol}: ${row[nameCol]}<br>`;
+                if (valCol) popupContent += `${valCol}: ${Number(row[valCol]).toLocaleString()}<br>`;
+                
+                const marker = L.circleMarker([lat, lng], {
+                    radius: 8,
+                    fillColor: "#ef4444", // Red
+                    color: "#fff",
+                    weight: 1,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).bindPopup(popupContent);
+                
+                markersLayer.addLayer(marker);
+                bounds.push([lat, lng]);
+            }
+        });
+
+        if (bounds.length > 0) {
+            map.fitBounds(bounds, { padding: [50, 50] });
+        }
+    }
+
+    function buildCharts(data, dataInfo) {
+        // Destroy old charts to prevent overlapping
+        if (charts.bar) charts.bar.destroy();
+        if (charts.pie) charts.pie.destroy();
+        if (charts.line) charts.line.destroy();
+
+        const catCol = dataInfo.categoricalCols[0];
+        const numCol = dataInfo.numericCols.find(c => c !== dataInfo.geoCols.lat && c !== dataInfo.geoCols.lng);
+        const dateCol = dataInfo.dateCols[0];
+
+        // 1. Bar Chart (Top 10)
+        if (catCol && numCol) {
+            document.getElementById('bar-chart-title').innerHTML = `<i class="fa-solid fa-chart-bar mr-2 text-green-500"></i>10 อันดับสูงสุดตาม ${catCol}`;
+            
+            // Group and sum
+            const grouped = {};
+            data.forEach(row => {
+                let key = row[catCol] || 'ไม่ระบุ';
+                grouped[key] = (grouped[key] || 0) + (Number(row[numCol]) || 0);
+            });
+            
+            // Sort and take top 10
+            const sortedData = Object.entries(grouped)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10);
+            
+            const ctxBar = document.getElementById('barChart').getContext('2d');
+            charts.bar = new Chart(ctxBar, {
+                type: 'bar',
+                data: {
+                    labels: sortedData.map(d => d[0]),
+                    datasets: [{
+                        label: numCol,
+                        data: sortedData.map(d => d[1]),
+                        backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                        borderColor: 'rgba(59, 130, 246, 1)',
+                        borderWidth: 1,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        }
+
+        // 2. Pie Chart (Distribution)
+        if (catCol && numCol) {
+            // Group and sum, limit to top 5 + "อื่นๆ"
+            const grouped = {};
+            data.forEach(row => {
+                let key = row[catCol] || 'ไม่ระบุ';
+                grouped[key] = (grouped[key] || 0) + (Number(row[numCol]) || 0);
+            });
+            
+            let sortedData = Object.entries(grouped).sort((a, b) => b[1] - a[1]);
+            let finalLabels = [];
+            let finalData = [];
+            
+            if(sortedData.length > 6) {
+                let top5 = sortedData.slice(0, 5);
+                let othersSum = sortedData.slice(5).reduce((acc, curr) => acc + curr[1], 0);
+                
+                finalLabels = top5.map(d => d[0]);
+                finalData = top5.map(d => d[1]);
+                
+                finalLabels.push('อื่นๆ');
+                finalData.push(othersSum);
+            } else {
+                finalLabels = sortedData.map(d => d[0]);
+                finalData = sortedData.map(d => d[1]);
+            }
+
+            document.getElementById('pie-chart-title').innerHTML = `<i class="fa-solid fa-chart-pie mr-2 text-indigo-500"></i>สัดส่วน ${numCol}`;
+            
+            const ctxPie = document.getElementById('pieChart').getContext('2d');
+            charts.pie = new Chart(ctxPie, {
+                type: 'doughnut',
+                data: {
+                    labels: finalLabels,
+                    datasets: [{
+                        data: finalData,
+                        backgroundColor: chartColors,
+                        borderWidth: 2,
+                        borderColor: '#ffffff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'right' }
+                    }
+                }
+            });
+        }
+
+        // 3. Line Chart (Time Series)
+        if (dateCol && numCol) {
+            document.getElementById('line-chart-title').innerHTML = `<i class="fa-solid fa-chart-line mr-2 text-red-500"></i>แนวโน้ม ${numCol} ตามเวลา`;
+            
+            // Group by date
+            const groupedDate = {};
+            data.forEach(row => {
+                let key = row[dateCol];
+                if(key) {
+                    groupedDate[key] = (groupedDate[key] || 0) + (Number(row[numCol]) || 0);
+                }
+            });
+            
+            // Sort by date key (Assuming standard date format, might need tweaking based on actual data)
+            const sortedDateData = Object.entries(groupedDate).sort((a, b) => new Date(a[0]) - new Date(b[0]));
+            
+            const ctxLine = document.getElementById('lineChart').getContext('2d');
+            charts.line = new Chart(ctxLine, {
+                type: 'line',
+                data: {
+                    labels: sortedDateData.map(d => d[0]),
+                    datasets: [{
+                        label: numCol,
+                        data: sortedDateData.map(d => d[1]),
+                        borderColor: 'rgba(239, 68, 68, 1)', // Red
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.3,
+                        fill: true,
+                        pointBackgroundColor: 'rgba(239, 68, 68, 1)',
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { 
+                        y: { beginAtZero: true },
+                        x: {
+                            ticks: { maxTicksLimit: 10 } // Prevent label crowding
+                        }
+                    }
+                }
+            });
+        } else if (!dateCol) {
+            // Fallback if no date column found
+            document.getElementById('line-chart-title').innerHTML = `<i class="fa-solid fa-circle-info mr-2 text-gray-500"></i>ไม่พบคอลัมน์วันที่`;
+            const ctxLine = document.getElementById('lineChart').getContext('2d');
+            ctxLine.canvas.parentElement.innerHTML = '<div class="h-full flex items-center justify-center text-gray-400">ชุดข้อมูลนี้ไม่มีคอลัมน์รูปแบบวันที่ (Date) ไม่สามารถสร้างกราฟแนวโน้มได้</div>';
+        }
+    }
+
+    function showLoading(show) {
+        document.getElementById('loading-screen').style.display = show ? 'flex' : 'none';
+    }
+
+    function showError(msg) {
+        document.getElementById('error-container').classList.remove('hidden');
+        document.getElementById('error-message').innerText = msg;
+    }
+
+    function hideError() {
+        document.getElementById('error-container').classList.add('hidden');
+    }
+
+    function updateTimestamp() {
+        const now = new Date();
+        const timeString = now.toLocaleTimeString('th-TH');
+        document.getElementById('last-updated').innerText = `อัพเดทล่าสุด: ${timeString}`;
+    }
+</script>
+
+</body>
+</html>
